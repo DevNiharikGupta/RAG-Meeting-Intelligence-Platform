@@ -1,21 +1,3 @@
-"""
-Task 5 Part 1 - Databricks Integration
-
-This module handles saving transcript chunks and extracted insights
-to Databricks Delta tables. It works ALONGSIDE the local ChromaDB
-storage — so local still works even if Databricks is not connected.
-
-Tables created:
-  - transcript_chunks: stores each chunk with its source and embedding
-  - meeting_insights: stores extracted insights (action items, decisions, etc.)
-
-How it works:
-  1. We connect to Databricks using a SQL connector (like connecting to any database)
-  2. We create tables if they don't exist (Delta tables)
-  3. When ingesting a transcript, we save chunks to the transcript_chunks table
-  4. When extracting insights, we save the JSON to the meeting_insights table
-"""
-
 import os
 import json
 from datetime import datetime
