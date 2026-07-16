@@ -6,11 +6,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from ingest import read_transcript, split_into_chunks, store_in_chroma
+from ingest import read_transcript, split_into_chunks, store_in_chroma, ingest_file
 from query import query
 from insights import extract_insights
+from databricks_store import (
+    is_databricks_configured,
+    save_insights_to_databricks,
+    get_all_chunks,
+    get_all_insights,
+    create_tables,
+)
 
-app = FastAPI(title="Meeting Intelligence API", version="1.0.0")
+app = FastAPI(title="Meeting Intelligence API", version="2.0.0")
 
 
 class QueryRequest(BaseModel):
@@ -27,16 +34,17 @@ class OrchestrateRequest(BaseModel):
 
 @app.post("/ingest")
 def ingest_transcript(file_path: str):
-    """Chunk a transcript file, embed it, store in ChromaDB."""
+    """Chunk a transcript file, embed it, store in ChromaDB + Databricks."""
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
 
-    text = read_transcript(file_path)
-    chunks = split_into_chunks(text)
-    count = store_in_chroma(chunks, source_name=os.path.basename(file_path))
+    count = ingest_file(file_path)
 
-    return {"message": "Transcript ingested", "chunks_created": count}
-
+    return {
+        "message": "Transcript ingested",
+        "chunks_created": count,
+        "databricks_enabled": is_databricks_configured(),
+    }
 
 
 @app.post("/query")
@@ -56,34 +64,64 @@ def query_meetings(req: QueryRequest):
 
 @app.post("/insights")
 def get_insights(req: InsightRequest):
-    """Extract action items, decisions, discussion points from a transcript file."""
+    """Extract insights from a transcript file, save to Databricks too."""
     if not os.path.exists(req.file_path):
         raise HTTPException(status_code=404, detail="File not found")
 
     text = read_transcript(req.file_path)
     insights = extract_insights(text)
-    return {"insights": insights}
+
+    if is_databricks_configured():
+        save_insights_to_databricks(insights, os.path.basename(req.file_path))
+
+    return {
+        "insights": insights,
+        "databricks_saved": is_databricks_configured(),
+    }
 
 
 @app.post("/orchestrate")
 def orchestrate(req: OrchestrateRequest):
-    """Main endpoint - extracts insights + optionally answers a question."""
+    """Main endpoint - ingest + insights + optionally answer a question."""
     if not os.path.exists(req.file_path):
         raise HTTPException(status_code=404, detail="File not found")
 
     text = read_transcript(req.file_path)
+    source = os.path.basename(req.file_path)
 
-    # always extract insights
     response = {"insights": extract_insights(text)}
 
-    # if a question was also asked, answer it using RAG
+    if is_databricks_configured():
+        save_insights_to_databricks(response["insights"], source)
+
     if req.question and req.question.strip():
         result = query(req.question)
         response["query_answer"] = result["answer"]
         response["query_sources"] = result["sources"]
 
+    response["databricks_enabled"] = is_databricks_configured()
     return response
 
+
+# ---- Databricks-specific endpoints ----
+@app.get("/databricks/chunks")
+def get_databricks_chunks(source_file: Optional[str] = None):
+    """Read stored chunks from Databricks Delta table."""
+    if not is_databricks_configured():
+        raise HTTPException(status_code=400, detail="Databricks not configured")
+
+    rows = get_all_chunks(source_name=source_file)
+    return {"count": len(rows), "chunks": rows}
+
+
+@app.get("/databricks/insights")
+def get_databricks_insights(source_file: Optional[str] = None):
+    """Read stored insights from Databricks Delta table."""
+    if not is_databricks_configured():
+        raise HTTPException(status_code=400, detail="Databricks not configured")
+
+    rows = get_all_insights(source_name=source_file)
+    return {"count": len(rows), "insights": rows}
 
 
 if __name__ == "__main__":

@@ -7,4 +7,3 @@ python-dotenv
 fastapi
 uvicorn
 databricks-sql-connector
-pandas

@@ -4,6 +4,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 from langchain_chroma import Chroma
+from databricks_store import save_chunks_to_databricks, is_databricks_configured
 
 load_dotenv()
 
@@ -57,10 +58,8 @@ def store_in_chroma(chunks, source_name="unknown"):
     return len(documents)
 
 
-# run directly to test
-if __name__ == "__main__":
-    filepath = "./data/transcripts/sprint_planning.txt"
-
+def ingest_file(filepath):
+    """Full pipeline: read file -> chunk -> store in ChromaDB + Databricks."""
     print(f"Reading: {filepath}")
     text = read_transcript(filepath)
     print(f"  {len(text)} characters")
@@ -69,6 +68,23 @@ if __name__ == "__main__":
     chunks = split_into_chunks(text)
     print(f"  {len(chunks)} chunks created")
 
-    print("Embedding and storing in ChromaDB...")
-    count = store_in_chroma(chunks, source_name=os.path.basename(filepath))
-    print(f"  {count} chunks stored. Done!")
+    source = os.path.basename(filepath)
+
+    print("Storing in ChromaDB...")
+    count = store_in_chroma(chunks, source_name=source)
+    print(f"  {count} chunks stored in ChromaDB.")
+
+    if is_databricks_configured():
+        print("Also saving to Databricks...")
+        save_chunks_to_databricks(chunks, source_name=source)
+    else:
+        print("  Databricks not configured, skipping. (local ChromaDB still works)")
+
+    return count
+
+
+# run directly to test
+if __name__ == "__main__":
+    filepath = "./data/transcripts/sprint_planning.txt"
+    ingest_file(filepath)
+    print("Done!")

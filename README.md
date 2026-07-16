@@ -6,6 +6,7 @@ You give it a meeting transcript (.txt file), and it can:
 - Answer questions about the meeting ("What did Bob say about the deadline?")
 - Pull out action items, decisions, discussion points automatically
 - Do both at once through a single API call
+- Store all data in **Databricks Delta tables** alongside local ChromaDB
 
 It uses RAG (Retrieval-Augmented Generation) — a technique where we first search for relevant parts of the transcript, then ask an LLM to answer based on those parts.
 
@@ -15,12 +16,13 @@ It uses RAG (Retrieval-Augmented Generation) — a technique where we first sear
 
 ```
 AI/
-├── .env              # config (model names, paths, chunk size)
-├── requirements.txt  # python packages
-├── ingest.py         # Task 1: read transcript → chunk → embed → store
-├── query.py          # Task 2: question → search → LLM → answer
-├── insights.py       # Task 3: transcript → LLM → structured JSON
-├── server.py         # Task 4: FastAPI server wrapping all tasks
+├── .env                  # config (model names, paths, Databricks creds)
+├── requirements.txt      # python packages
+├── ingest.py             # Task 1: read transcript → chunk → embed → store
+├── query.py              # Task 2: question → search → LLM → answer
+├── insights.py           # Task 3: transcript → LLM → structured JSON
+├── server.py             # Task 4: FastAPI server wrapping all tasks
+├── databricks_store.py   # Task 5: Databricks Delta table integration
 └── data/
     ├── transcripts/
     │   └── sprint_planning.txt   # sample meeting
@@ -59,6 +61,32 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### 4. Set up Databricks (optional)
+
+This step is optional — everything works locally without Databricks. But if you want cloud storage too:
+
+1. Create a free account at https://community.cloud.databricks.com
+2. Go to SQL Warehouses → start the Serverless Starter Warehouse
+3. Click "Connection details" tab → copy Server Hostname and HTTP Path
+4. Go to Settings → Developer → Access tokens → Generate new token
+5. Fill in your `.env`:
+
+```
+DATABRICKS_HOST=https://community.cloud.databricks.com
+DATABRICKS_TOKEN=dapi...your-token...
+DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/your-warehouse-id
+DATABRICKS_CATALOG=
+DATABRICKS_SCHEMA=default
+```
+
+6. Create the tables:
+
+```bash
+python3 databricks_store.py
+```
+
+If it prints "Databricks tables ready." you're good.
+
 ---
 
 ## How to Run
@@ -68,7 +96,7 @@ pip install -r requirements.txt
 ```bash
 source venv/bin/activate
 
-python3 ingest.py      # stores transcript chunks in ChromaDB
+python3 ingest.py      # stores transcript chunks in ChromaDB + Databricks
 python3 query.py       # asks 3 test questions
 python3 insights.py    # extracts action items, decisions, etc.
 ```
@@ -86,7 +114,7 @@ python3 server.py
 
 ### ingest.py (Task 1 — Data Pipeline)
 
-Reads a `.txt` transcript file, splits it into ~500 character chunks, converts each chunk into a number vector using `nomic-embed-text`, and stores everything in ChromaDB.
+Reads a `.txt` transcript file, splits it into ~500 character chunks, converts each chunk into a number vector using `nomic-embed-text`, and stores everything in ChromaDB. If Databricks is configured, chunks also go to the `transcript_chunks` Delta table.
 
 **Why chunk?** A full transcript is too long for search. Small chunks let us find the exact part that answers a question.
 
@@ -97,6 +125,7 @@ Reads a `.txt` transcript file, splits it into ~500 character chunks, converts e
 - `split_into_chunks(text)` — breaks text into overlapping pieces
 - `get_embedding_fn()` — creates the Ollama embedding model connection
 - `store_in_chroma(chunks, source_name)` — embeds and stores in ChromaDB
+- `ingest_file(filepath)` — full pipeline: read → chunk → ChromaDB + Databricks
 
 ### query.py (Task 2 — RAG Query System)
 
@@ -123,19 +152,36 @@ Sends the full transcript to phi3 with a prompt asking for structured JSON outpu
 
 ### server.py (Task 4 — FastAPI Orchestrator)
 
-Wraps everything into HTTP endpoints. The key endpoint is `/orchestrate` which runs insight extraction + optional question answering in one call.
+Wraps everything into HTTP endpoints. The key endpoint is `/orchestrate` which runs insight extraction + optional question answering in one call. All endpoints automatically save to Databricks when configured.
 
 **Endpoints:**
 - `POST /ingest` — give it a file path, it chunks and stores the transcript
 - `POST /query` — give it a question, get a RAG answer
 - `POST /insights` — give it a file path, get structured insights
 - `POST /orchestrate` — give it a file path + optional question, get everything
+- `GET /databricks/status` — check if Databricks is connected
+- `GET /databricks/chunks` — read stored chunks from Databricks
+- `GET /databricks/insights` — read stored insights from Databricks
+
+### databricks_store.py (Task 5 — Databricks Integration)
+
+Handles saving data to Databricks Delta tables alongside local ChromaDB. Creates two tables: `transcript_chunks` (stores chunked text) and `meeting_insights` (stores extracted JSON insights). If Databricks is not configured, all functions silently skip — nothing breaks.
+
+**Functions:**
+- `is_databricks_configured()` — checks if credentials are filled in
+- `get_connection()` — opens SQL connection to Databricks warehouse
+- `create_tables()` — creates Delta tables (safe to run multiple times)
+- `save_chunks_to_databricks(chunks, source_name)` — writes chunks to Delta table
+- `save_insights_to_databricks(insights, source_name)` — writes insights to Delta table
+- `get_all_chunks(source_name)` — reads chunks back from Databricks
+- `get_all_insights(source_name)` — reads insights back from Databricks
 
 ---
 
 ## .env Config
 
 ```
+# Ollama (required)
 OLLAMA_BASE_URL=http://localhost:11434    # where Ollama runs
 OLLAMA_EMBED_MODEL=nomic-embed-text      # converts text to vectors
 OLLAMA_LLM_MODEL=phi3                    # generates answers
@@ -143,6 +189,13 @@ CHROMA_DB_PATH=./data/chroma_db          # where vectors are saved
 CHUNK_SIZE=500                           # characters per chunk
 CHUNK_OVERLAP=50                         # overlap between chunks
 TOP_K=5                                  # how many chunks to retrieve
+
+# Databricks (optional — leave empty to use only local storage)
+DATABRICKS_HOST=https://community.cloud.databricks.com
+DATABRICKS_TOKEN=your-token-here
+DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/your-warehouse-id
+DATABRICKS_CATALOG=                      # leave empty for Community Edition
+DATABRICKS_SCHEMA=default
 ```
 
 ---
@@ -151,12 +204,16 @@ TOP_K=5                                  # how many chunks to retrieve
 
 ```
 ingest.py writes to ──> ChromaDB (data/chroma_db/)
-                            ^
-query.py reads from ────────┘
+            |               ^
+            |   query.py reads from ┘
+            |
+            └───────────> Databricks (transcript_chunks table)
 
-insights.py reads ──> transcript .txt files (no ChromaDB needed)
+insights.py reads ──> transcript .txt files
+            |
+            └───────────> Databricks (meeting_insights table)
 
-server.py imports ──> ingest.py, query.py, insights.py
+server.py imports ──> ingest.py, query.py, insights.py, databricks_store.py
                       (calls their functions through HTTP endpoints)
 ```
 
@@ -164,8 +221,10 @@ server.py imports ──> ingest.py, query.py, insights.py
 
 ## Testing with curl
 
+### Core Endpoints
+
 ```bash
-# ingest a transcript
+# ingest a transcript (stores in ChromaDB + Databricks)
 curl -X POST "http://localhost:8000/ingest?file_path=./data/transcripts/sprint_planning.txt"
 
 # ask a question
@@ -173,7 +232,7 @@ curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -d '{"question": "What was decided about rate limiting?"}'
 
-# extract insights
+# extract insights (saves to Databricks too)
 curl -X POST http://localhost:8000/insights \
   -H "Content-Type: application/json" \
   -d '{"file_path": "./data/transcripts/sprint_planning.txt"}'
@@ -184,3 +243,18 @@ curl -X POST http://localhost:8000/orchestrate \
   -d '{"file_path": "./data/transcripts/sprint_planning.txt", "question": "Who has action items?"}'
 ```
 
+### Databricks Endpoints
+
+```bash
+# get all chunks stored in Databricks
+curl http://localhost:8000/databricks/chunks
+
+# get chunks for a specific file
+curl "http://localhost:8000/databricks/chunks?source_file=sprint_planning.txt"
+
+# get all insights stored in Databricks
+curl http://localhost:8000/databricks/insights
+
+# get insights for a specific file
+curl "http://localhost:8000/databricks/insights?source_file=sprint_planning.txt"
+```
