@@ -1,0 +1,57 @@
+Meeting: Sprint Planning - Q3 Feature Rollout
+Date: 2026-07-10
+Participants: Alice (Product Manager), Bob (Tech Lead), Carol (Backend Dev), Dave (Frontend Dev), Eve (QA Lead)
+
+[00:00] Alice: Good morning everyone. Let's kick off our sprint planning for the Q3 feature rollout. We have three main items on the agenda today. First, the new user dashboard redesign. Second, the API rate limiting feature. And third, the mobile push notification system.
+
+[02:15] Bob: Before we dive in, I want to flag that we still have some technical debt from last sprint. The database migration scripts need cleanup, and we have about 15 failing integration tests that were marked as skip.
+
+[03:40] Alice: Noted. Let's make sure we allocate some capacity for that. How much time do you think we need?
+
+[04:10] Bob: I'd estimate about two days of focused work. Carol, you were closest to the migration code. What do you think?
+
+[04:30] Carol: Yeah, two days sounds right. The migration scripts are mostly working, but we have edge cases with users who created accounts before 2024. Their data format is slightly different. I can handle that if we prioritize it early in the sprint.
+
+[05:45] Alice: Okay, let's make that a priority. Now, onto the dashboard redesign. Dave, can you walk us through the current status?
+
+[06:10] Dave: Sure. I've completed the wireframes and got approval from the design team last week. The main changes are a new activity feed component, updated charts using the D3 library, and a collapsible sidebar navigation. I estimate the frontend work will take about five days.
+
+[07:30] Bob: Dave, will you need any new API endpoints for the activity feed?
+
+[07:45] Dave: Yes, I'll need at least two new endpoints. One for fetching recent activities with pagination, and another for the real-time notification count. Carol, can you build those?
+
+[08:15] Carol: Absolutely. I can start on the API endpoints while Dave works on the frontend components. I'll have the activity feed endpoint ready by Wednesday. The notification count endpoint should be simpler, maybe a day of work.
+
+[09:00] Alice: Perfect. That brings us to the API rate limiting feature. Bob, this was your proposal. Can you explain why we need it?
+
+[09:20] Bob: We've been seeing increased traffic from some API consumers who are making excessive requests. Last week, one client made over 50,000 requests in an hour, which degraded performance for everyone. We need to implement rate limiting with configurable thresholds per API key.
+
+[10:45] Alice: What's the implementation approach?
+
+[11:00] Bob: I'm proposing we use a token bucket algorithm implemented with Redis. Each API key gets a bucket that refills at a configurable rate. When the bucket is empty, requests get a 429 status code. We should also add response headers showing remaining quota.
+
+[12:30] Carol: I've worked with token bucket before. One thing to consider is burst handling. Should we allow short bursts above the rate limit, or enforce it strictly?
+
+[13:00] Bob: Good question. I think we should allow bursts up to 2x the normal rate for a 10-second window. That handles legitimate traffic spikes without opening the door to abuse.
+
+[13:30] Alice: Sounds reasonable. Eve, from a testing perspective, what do we need?
+
+[13:50] Eve: I'll need to write load tests that verify the rate limiting works correctly under different scenarios. I also want to test the edge cases like what happens when Redis goes down. Does the system fail open or fail closed?
+
+[14:30] Bob: Great point. I think we should fail open, meaning if Redis is unavailable, we allow requests through rather than blocking all traffic. We can log warnings and fall back to in-memory rate limiting with reduced accuracy.
+
+[15:15] Alice: Last item, the mobile push notification system. This is a new feature our users have been requesting. We need to send push notifications for important events like assignment changes, deadline reminders, and team mentions.
+
+[16:00] Dave: I've researched the options. I recommend we use Firebase Cloud Messaging for both Android and iOS. It has a generous free tier and good documentation. The frontend integration should take about three days.
+
+[16:45] Carol: On the backend, I'll need to build a notification service that queues messages and sends them through Firebase. I'd like to use a message queue like RabbitMQ so we don't slow down the main API with notification delivery.
+
+[17:30] Bob: I agree with the message queue approach. We should also build a notification preferences table so users can choose which notifications they want to receive.
+
+[18:00] Eve: For testing, I'll set up a mock Firebase service so we can run integration tests without hitting the real API. I'll also add end-to-end tests for the notification flow.
+
+[18:30] Alice: Great discussion everyone. Let me summarize the decisions we've made today. First, we'll prioritize the database migration cleanup at the start of the sprint. Second, Dave will lead the dashboard redesign with Carol providing the new API endpoints. Third, Bob will implement the rate limiting using Redis with a token bucket algorithm. Fourth, Carol will build the push notification backend using RabbitMQ, and Dave will handle the frontend integration with Firebase. Eve will provide testing support across all features. The sprint starts Monday. Any questions?
+
+[19:45] Bob: One more thing. I think we should schedule a mid-sprint review on Wednesday of next week to check progress on all three features.
+
+[20:00] Alice: Good idea. I'll send out a calendar invite. Meeting adjourned.

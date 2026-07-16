@@ -1,0 +1,10 @@
+langchain
+langchain-community
+langchain-chroma
+langchain-ollama
+chromadb>=1.0.9
+python-dotenv
+fastapi
+uvicorn
+databricks-sql-connector
+pandas
