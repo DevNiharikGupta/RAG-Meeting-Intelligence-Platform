@@ -183,18 +183,3 @@ curl -X POST http://localhost:8000/orchestrate \
   -H "Content-Type: application/json" \
   -d '{"file_path": "./data/transcripts/sprint_planning.txt", "question": "Who has action items?"}'
 ```
-
-### How the Files Connect
-
-```
-ingest.py ──writes──> data/chroma_db/
-                           ^
-                           |
-query.py ───reads──────────┘
-                           
-insights.py ──reads──> data/transcripts/*.txt
-                           ^
-                           |
-server.py ─────imports─> ingest.py, query.py, insights.py
-              (calls their functions via HTTP endpoints)
-```
