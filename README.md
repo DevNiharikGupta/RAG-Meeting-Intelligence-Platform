@@ -7,6 +7,7 @@ You give it a meeting transcript (.txt file), and it can:
 - Pull out action items, decisions, discussion points automatically
 - Do both at once through a single API call
 - Store all data in **Databricks Delta tables** alongside local ChromaDB
+- Use a **multi-agent system** (LangGraph) that automatically routes your request to the right agent
 
 It uses RAG (Retrieval-Augmented Generation) — a technique where we first search for relevant parts of the transcript, then ask an LLM to answer based on those parts.
 
@@ -22,7 +23,8 @@ AI/
 ├── query.py              # Task 2: question → search → LLM → answer
 ├── insights.py           # Task 3: transcript → LLM → structured JSON
 ├── server.py             # Task 4: FastAPI server wrapping all tasks
-├── databricks_store.py   # Task 5: Databricks Delta table integration
+├── databricks_store.py   # Task 5 Part 1: Databricks Delta table integration
+├── agents.py             # Task 5 Part 2: Multi-agent system (LangGraph)
 └── data/
     ├── transcripts/
     │   └── sprint_planning.txt   # sample meeting
@@ -99,6 +101,7 @@ source venv/bin/activate
 python3 ingest.py      # stores transcript chunks in ChromaDB + Databricks
 python3 query.py       # asks 3 test questions
 python3 insights.py    # extracts action items, decisions, etc.
+python3 agents.py      # runs multi-agent pipeline (3 test cases)
 ```
 
 ### Run the API server
@@ -159,11 +162,11 @@ Wraps everything into HTTP endpoints. The key endpoint is `/orchestrate` which r
 - `POST /query` — give it a question, get a RAG answer
 - `POST /insights` — give it a file path, get structured insights
 - `POST /orchestrate` — give it a file path + optional question, get everything
-- `GET /databricks/status` — check if Databricks is connected
+- `POST /agent` — smart endpoint: Router Agent decides what to do automatically
 - `GET /databricks/chunks` — read stored chunks from Databricks
 - `GET /databricks/insights` — read stored insights from Databricks
 
-### databricks_store.py (Task 5 — Databricks Integration)
+### databricks_store.py (Task 5 Part 1 — Databricks Integration)
 
 Handles saving data to Databricks Delta tables alongside local ChromaDB. Creates two tables: `transcript_chunks` (stores chunked text) and `meeting_insights` (stores extracted JSON insights). If Databricks is not configured, all functions silently skip — nothing breaks.
 
@@ -175,6 +178,28 @@ Handles saving data to Databricks Delta tables alongside local ChromaDB. Creates
 - `save_insights_to_databricks(insights, source_name)` — writes insights to Delta table
 - `get_all_chunks(source_name)` — reads chunks back from Databricks
 - `get_all_insights(source_name)` — reads insights back from Databricks
+
+### agents.py (Task 5 Part 2 — Multi-Agent System)
+
+Uses LangGraph to build a workflow of 4 specialized agents that collaborate:
+
+```
+User input → Router Agent → decides route
+                |
+                ├── "question"  → Retrieval Agent → Summary Agent → response
+                ├── "insights"  → Insight Agent   → Summary Agent → response
+                └── "both"      → Retrieval + Insight → Summary Agent → response
+```
+
+**Agents:**
+- `router_agent` — classifies the request as "question", "insights", or "both"
+- `retrieval_agent` — searches ChromaDB and answers using RAG (reuses query.py logic)
+- `insight_agent` — extracts structured insights from transcript (reuses insights.py logic)
+- `summary_agent` — combines outputs from other agents into one final response
+
+**Functions:**
+- `build_agent_graph()` — creates and compiles the LangGraph state graph
+- `run_agents(user_input, file_path)` — runs the full multi-agent pipeline
 
 ---
 
@@ -213,7 +238,13 @@ insights.py reads ──> transcript .txt files
             |
             └───────────> Databricks (meeting_insights table)
 
-server.py imports ──> ingest.py, query.py, insights.py, databricks_store.py
+agents.py  ──> Router Agent decides route
+            ├── calls query.py (Retrieval Agent)
+            ├── calls insights.py (Insight Agent)
+            └── Summary Agent combines results
+
+server.py imports ──> ingest.py, query.py, insights.py,
+                      databricks_store.py, agents.py
                       (calls their functions through HTTP endpoints)
 ```
 
@@ -241,6 +272,25 @@ curl -X POST http://localhost:8000/insights \
 curl -X POST http://localhost:8000/orchestrate \
   -H "Content-Type: application/json" \
   -d '{"file_path": "./data/transcripts/sprint_planning.txt", "question": "Who has action items?"}'
+```
+
+### Agent Endpoint (Multi-Agent)
+
+```bash
+# question only — Router sends to Retrieval Agent
+curl -X POST http://localhost:8000/agent \
+  -H "Content-Type: application/json" \
+  -d '{"user_input": "What was decided about rate limiting?"}'
+
+# insights only — Router sends to Insight Agent
+curl -X POST http://localhost:8000/agent \
+  -H "Content-Type: application/json" \
+  -d '{"user_input": "", "file_path": "./data/transcripts/sprint_planning.txt"}'
+
+# both — Router sends to Retrieval + Insight Agents
+curl -X POST http://localhost:8000/agent \
+  -H "Content-Type: application/json" \
+  -d '{"user_input": "Who has action items?", "file_path": "./data/transcripts/sprint_planning.txt"}'
 ```
 
 ### Databricks Endpoints

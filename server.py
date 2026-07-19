@@ -9,6 +9,7 @@ load_dotenv()
 from ingest import read_transcript, split_into_chunks, store_in_chroma, ingest_file
 from query import query
 from insights import extract_insights
+from agents import run_agents
 from databricks_store import (
     is_databricks_configured,
     save_insights_to_databricks,
@@ -30,6 +31,10 @@ class InsightRequest(BaseModel):
 class OrchestrateRequest(BaseModel):
     file_path: str
     question: Optional[str] = None
+
+class AgentRequest(BaseModel):
+    user_input: str
+    file_path: Optional[str] = None
 
 
 @app.post("/ingest")
@@ -101,6 +106,25 @@ def orchestrate(req: OrchestrateRequest):
 
     response["databricks_enabled"] = is_databricks_configured()
     return response
+
+
+# ---- Agent endpoint (multi-agent LangGraph) ----
+
+@app.post("/agent")
+def agent_endpoint(req: AgentRequest):
+    """Smart endpoint — Router Agent decides whether to search, extract insights, or both."""
+    if req.file_path and not os.path.exists(req.file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not req.user_input.strip() and not req.file_path:
+        raise HTTPException(status_code=400, detail="Provide a question, file_path, or both")
+
+    result = run_agents(req.user_input, file_path=req.file_path)
+
+    if req.file_path and result.get("insights") and is_databricks_configured():
+        save_insights_to_databricks(result["insights"], os.path.basename(req.file_path))
+
+    return result
 
 
 # ---- Databricks-specific endpoints ----
